@@ -176,6 +176,7 @@ bool is_adjacent_lane(int lane_id, int current_lane)
 double max_s = 6945.554;
 double ref_vel = 0.0;
 int lane = 1;
+double MAX_SPEED = 49.2;
 
 struct AdjacentCarInfo {
   int front_car_id = -1;
@@ -188,6 +189,8 @@ struct LaneStatusInfo {
   bool can_change_lane = true;
   double current_front_car_distance = 0;
   double future_front_car_distance = 0;
+  double current_back_car_distance = 0;
+  double future_back_car_distance = 0;
 };
 
 struct CarInstruction {
@@ -266,11 +269,12 @@ vector<LaneStatusInfo> get_lane_status_infos(
     const auto& adjacent_info = adjacent_infos[i];
 
     auto& lane_status_info = lane_status_infos[i];
-    if (adjacent_info.front_car_distance < 5 || adjacent_info.back_car_distance < 5) {
+    if (adjacent_info.front_car_distance < 5 || adjacent_info.back_car_distance < 20) {
       lane_status_info.can_change_lane = false;
     }
 
     lane_status_info.current_front_car_distance = adjacent_info.front_car_distance;
+    lane_status_info.current_back_car_distance = adjacent_info.back_car_distance;
 
     // check front car
     if (adjacent_info.front_car_id >= 0) {
@@ -297,24 +301,38 @@ vector<LaneStatusInfo> get_lane_status_infos(
       double check_car_speed = sqrt(vx*vx + vy*vy);
       double check_car_s = sensor_fusion[adjacent_info.back_car_id][5];
 
-      double future_back_car_distance = \
+      lane_status_info.future_back_car_distance = \
         (car_s + car_speed * 1.5) - (check_car_s + check_car_speed * 1.5);
-      if (future_back_car_distance < 0) {
+      if (car_speed >= check_car_speed &&
+          lane_status_info.future_back_car_distance <= 20) {
         lane_status_info.can_change_lane = false;
       }
+      if (car_speed < check_car_speed &&
+          lane_status_info.future_back_car_distance <= 40) {
+        lane_status_info.can_change_lane = false;
+      }
+    } else {
+      // no back car
+      lane_status_info.future_back_car_distance = lane_status_info.current_back_car_distance;
     }
   }
 
   cout << "lane_status_infos: "
        << "0: can_change_lane: " << lane_status_infos[0].can_change_lane
-       << " front_dist: " << lane_status_infos[0].current_front_car_distance
-       << " future front_dist: " << lane_status_infos[0].future_front_car_distance
+       << " current_front: " << lane_status_infos[0].current_front_car_distance
+       << " future_front: " << lane_status_infos[0].future_front_car_distance
+       << " current_back: " << lane_status_infos[0].current_back_car_distance
+       << " future_back: " << lane_status_infos[0].future_back_car_distance
        << ", 1: can_change_lane: " << lane_status_infos[1].can_change_lane
-       << " front_dist: " << lane_status_infos[1].current_front_car_distance
-       << " future front_dist: " << lane_status_infos[1].future_front_car_distance
+       << " current_front: " << lane_status_infos[1].current_front_car_distance
+       << " future_front: " << lane_status_infos[1].future_front_car_distance
+       << " current_back: " << lane_status_infos[1].current_back_car_distance
+       << " future_back: " << lane_status_infos[1].future_back_car_distance
        << ", 2: can_change_lane: " << lane_status_infos[2].can_change_lane
-       << " front_dist: " << lane_status_infos[2].current_front_car_distance
-       << " future front_dist: " << lane_status_infos[2].future_front_car_distance
+       << " current_front: " << lane_status_infos[2].current_front_car_distance
+       << " future_front: " << lane_status_infos[2].future_front_car_distance
+       << " current_back: " << lane_status_infos[2].current_back_car_distance
+       << " future_back: " << lane_status_infos[2].future_back_car_distance
      << endl;
   return lane_status_infos;
 }
@@ -391,14 +409,16 @@ int next_lane_to_drive(
   // calculate the lane score to determine if it can change lane
   if (current_lane_info.future_front_car_distance <= 10) {
     // too close to the front car, change the lane now
+    cout << "****** too close to the front car, change the lane now: " << change_to_lane << endl;
     return change_to_lane;
   }
 
   static int previous_best_lane = -1;
   static int accumulate_count = 0;
-  if (change_to_lane == previous_best_lane && accumulate_count > 30) {
+  if (change_to_lane == previous_best_lane && accumulate_count >= 30) {
     previous_best_lane = -1;
     accumulate_count = 0;
+    cout << "****** Mointor for a long while and change now: " << change_to_lane << endl;
     return change_to_lane;
   }
 
@@ -411,6 +431,9 @@ int next_lane_to_drive(
   // wait for more round of estimation
   previous_best_lane = change_to_lane;
   accumulate_count = 1;
+  cout << "------ signal lane change to lane " << change_to_lane
+       << ", but need to mointor for a while, stay at lane " << current_lane
+       << endl;
   return current_lane;
 }
 
@@ -429,7 +452,7 @@ CarInstruction update_car_instruction(
   } else if (instruction.change_to_lane == current_lane &&
              lane_status_infos[current_lane].future_front_car_distance < 10) {
     instruction.ref_vel = ref_vel;
-  } else if (ref_vel < 49.5) {
+  } else if (ref_vel < MAX_SPEED) {
     instruction.ref_vel = ref_vel + 0.224;
   } else {
     instruction.ref_vel = ref_vel;
@@ -646,7 +669,6 @@ int main() {
 
         	//this_thread::sleep_for(chrono::milliseconds(1000));
         	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
-
         }
       } else {
         // Manual driving
